@@ -141,6 +141,20 @@ class RateLimitMiddleware(BaseMiddleware):
 
 # ─── Background tasks ──────────────────────────────────────────────────────────
 
+async def _run_db_keepalive() -> None:
+    """Ping the DB every 4 minutes to prevent Neon free-tier from sleeping.
+    Neon pauses the compute after 5 min of inactivity — this keeps it warm."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            async with get_session() as db:
+                from sqlalchemy import text as _sa_text
+                await db.execute(_sa_text("SELECT 1"))
+        except Exception as exc:
+            logger.debug("DB keepalive ping failed: %s", exc)
+        await asyncio.sleep(240)  # Every 4 minutes
+
+
 async def _run_sync_loop() -> None:
     """Sync provider catalogues every SYNC_INTERVAL seconds."""
     await asyncio.sleep(60)  # Initial delay — let the bot start cleanly
@@ -282,6 +296,7 @@ async def main() -> None:
     dp.shutdown.register(on_shutdown)
 
     # Start background tasks
+    asyncio.create_task(_run_db_keepalive())   # Keep Neon DB warm (no cold-start lag)
     asyncio.create_task(_run_sync_loop())
     asyncio.create_task(_run_status_loop(bot))
 
@@ -289,10 +304,11 @@ async def main() -> None:
     logger.info("OWNER_IDS loaded: %s", OWNER_IDS)
     logger.info("ADMIN_IDS loaded: %s", ADMIN_IDS)
 
-    # Delete any stale webhook to prevent conflicts with polling
+    # Drop ALL pending updates on restart — avoids processing stale messages
+    # from the ~2-minute gap between GitHub Actions runs (every 5 hours)
     try:
-        await bot.delete_webhook(drop_pending_updates=False)
-        logger.info("Webhook cleared — polling mode active")
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook cleared + pending updates dropped — polling mode active")
     except Exception as exc:
         logger.warning("Could not clear webhook: %s", exc)
 
@@ -305,8 +321,8 @@ async def main() -> None:
             "successful_payment",
             "chat_member",
         ],
-        # Larger batch for high-load environments
-        limit=100,
+        limit=30,          # Smaller batches = lower latency per update
+        timeout=25,        # Long-poll 25s — reduces empty requests to Telegram
     )
 
 

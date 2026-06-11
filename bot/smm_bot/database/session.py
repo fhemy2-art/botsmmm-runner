@@ -131,19 +131,30 @@ async def init_db() -> None:
             "pool_pre_ping": True,
         }
     else:
+        # Auto-switch to Neon pooler endpoint — avoids cold-start 3-5s delays
+        # The pooler (PgBouncer) keeps connections warm and handles bursts
+        _db_url = DATABASE_URL
+        if "neon.tech" in _db_url and "-pooler" not in _db_url:
+            # ep-xxx.c-4.us-east-1.aws.neon.tech → ep-xxx-pooler.c-4.us-east-1.aws.neon.tech
+            import re
+            _db_url = re.sub(r"(ep-[^.]+)(\.)", r"\1-pooler\2", _db_url, count=1)
+            logger.info("Auto-switched to Neon pooler endpoint for faster connections")
+        DATABASE_URL = _db_url
+
         engine_kwargs = {
             "echo": False,
             "pool_pre_ping": True,
-            "pool_size": 20,           # More connections for high concurrency
-            "max_overflow": 40,        # Allow burst up to 60 total connections
-            "pool_timeout": 20,        # Fail faster if pool exhausted
-            "pool_recycle": 900,       # Recycle connections every 15 min (prevent stale)
+            "pool_size": 5,            # Neon pooler handles multiplexing — keep small
+            "max_overflow": 10,        # Burst up to 15 total connections
+            "pool_timeout": 10,        # Fail fast if pool exhausted
+            "pool_recycle": 300,       # Recycle every 5 min to keep connections fresh
             "connect_args": {
                 "server_settings": {
                     "application_name": "smm_bot",
-                    "statement_timeout": "30000",  # 30s query timeout
+                    "statement_timeout": "20000",  # 20s query timeout
                 },
-                "command_timeout": 30,
+                "command_timeout": 20,
+                "prepared_statement_cache_size": 0,  # Required for PgBouncer/Neon pooler
             },
         }
 

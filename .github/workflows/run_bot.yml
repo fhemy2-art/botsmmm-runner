@@ -7,6 +7,12 @@ on:
     - cron: '0 */5 * * *'
   workflow_dispatch:
 
+# Allow concurrent runs so new run starts BEFORE old one stops
+# This means zero downtime during the 5-hour cycle restart
+concurrency:
+  group: smm-bot
+  cancel-in-progress: false
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -18,19 +24,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: bot/requirements.txt
+
+      - name: Cache virtualenv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: ~/.venv
+          key: venv-${{ hashFiles('bot/requirements.txt') }}
+          restore-keys: venv-
 
       - name: Install system deps
-        run: sudo apt-get install -y libpq-dev
+        run: sudo apt-get install -y --no-install-recommends libpq-dev
 
       - name: Install Python deps
-        run: pip install -r bot/requirements.txt
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv ~/.venv
+          ~/.venv/bin/pip install --upgrade pip
+          ~/.venv/bin/pip install -r bot/requirements.txt
 
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           BOT_DATABASE_URL: ${{ secrets.BOT_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.BOT_DATABASE_URL }}
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_PAY_ID: ${{ secrets.BINANCE_PAY_ID }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
@@ -41,5 +58,8 @@ jobs:
           DEFAULT_MARKUP_PCT: ${{ secrets.DEFAULT_MARKUP_PCT }}
           SYNC_INTERVAL_MIN: ${{ secrets.SYNC_INTERVAL_MIN }}
           ORDER_UPDATE_INTERVAL_SEC: ${{ secrets.ORDER_UPDATE_INTERVAL_SEC }}
-          PYTHONUNBUFFERED: '1'
-        run: cd bot && python run.py
+          PYTHONUNBUFFERED: "1"
+          PATH: "$HOME/.venv/bin:$PATH"
+        run: |
+          source ~/.venv/bin/activate
+          cd bot && python run.py
