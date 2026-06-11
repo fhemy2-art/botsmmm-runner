@@ -1,0 +1,45 @@
+name: Run SMM Bot
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: bot/requirements.txt
+
+      - name: Install system deps
+        run: sudo apt-get install -y libpq-dev
+
+      - name: Install Python deps
+        run: pip install -r bot/requirements.txt
+
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          BOT_DATABASE_URL: ${{ secrets.BOT_DATABASE_URL }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_PAY_ID: ${{ secrets.BINANCE_PAY_ID }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          OWNER_IDS: ${{ secrets.OWNER_IDS }}
+          BOT_NAME: ${{ secrets.BOT_NAME }}
+          SUPPORT_USERNAME: ${{ secrets.SUPPORT_USERNAME }}
+          BOT_CHANNEL: ${{ secrets.BOT_CHANNEL }}
+          DEFAULT_MARKUP_PCT: ${{ secrets.DEFAULT_MARKUP_PCT }}
+          SYNC_INTERVAL_MIN: ${{ secrets.SYNC_INTERVAL_MIN }}
+          ORDER_UPDATE_INTERVAL_SEC: ${{ secrets.ORDER_UPDATE_INTERVAL_SEC }}
+          PYTHONUNBUFFERED: '1'
+        run: cd bot && python run.py

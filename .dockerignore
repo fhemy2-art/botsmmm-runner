@@ -1,0 +1,7 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.git
+**/.env.local
+**/smm_bot.db
+**/bot_settings.json
