@@ -1223,6 +1223,12 @@ async def transfer_amount_msg(message: Message, db, state: FSMContext):
 
 @router.callback_query(F.data == "transfer_confirm")
 async def transfer_confirm_cb(callback: CallbackQuery, db, state: FSMContext):
+    # Answer IMMEDIATELY — removes button spinner before DB work
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     data = await state.get_data()
     lang         = data.get("lang", "ar")
     sender_id    = data.get("sender_id") or callback.from_user.id
@@ -1245,14 +1251,32 @@ async def transfer_confirm_cb(callback: CallbackQuery, db, state: FSMContext):
         )
         return
 
+    # Show processing message immediately
     try:
-        sender = await get_or_create_user(db, sender_id)
-        if Decimal(str(sender.balance or 0)) < amount:
+        await callback.message.edit_text(
+            "⏳ <b>جارٍ تنفيذ التحويل...</b>" if lang == "ar" else "⏳ <b>Processing transfer...</b>",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[]),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    try:
+        from sqlalchemy import select as _sel_tr
+        # Fresh balance check — bypass cache, use current session
+        _br = await db.execute(_sel_tr(User).where(User.id == sender_id))
+        sender = _br.scalar_one_or_none()
+        if not sender or Decimal(str(sender.balance or 0)) < amount:
             await state.clear()
-            await callback.answer(
-                "❌ رصيد غير كافٍ." if lang == "ar" else "❌ Insufficient balance.",
-                show_alert=True,
-            )
+            _ikb = InlineKeyboardMarkup(inline_keyboard=add_nav([], lang))
+            _bal = float(sender.balance) if sender else 0.0
+            _msg = card("❌ رصيد غير كافٍ" if lang == "ar" else "❌ Insufficient Balance", [
+                f"رصيدك: <code>${_bal:.4f}</code>" if lang == "ar" else f"Balance: <code>${_bal:.4f}</code>",
+            ])
+            try:
+                await callback.message.edit_text(_msg, reply_markup=_ikb, parse_mode="HTML")
+            except Exception:
+                await callback.message.answer(_msg, reply_markup=_ikb, parse_mode="HTML")
             return
 
         import uuid
@@ -1327,10 +1351,7 @@ async def transfer_confirm_cb(callback: CallbackQuery, db, state: FSMContext):
             except Exception:
                 pass
     finally:
-        try:
-            await callback.answer()
-        except Exception:
-            pass
+        pass  # callback.answer() already called at top of handler
 
 
 @router.callback_query(F.data == "transfer_cancel")

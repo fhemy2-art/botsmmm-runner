@@ -459,13 +459,25 @@ async def owner_balance_handler(message: Message, db, state: FSMContext):
         return
 
     from repositories.user_repo import add_balance as _repo_add_bal, invalidate_user_cache as _inv_cache
+    from sqlalchemy import select as _owner_sel
     if action == "add":
+        # add_balance now uses FOR UPDATE (fresh session object) — safe to call
         user = await _repo_add_bal(db, target_id, amount, "شحن من المالك")
         emoji = "➕"
     else:
         from decimal import Decimal as _D
+        # Deduct: fresh SELECT to avoid detached-object bug
+        _res = await db.execute(_owner_sel(User).where(User.id == target_id).with_for_update())
+        user = _res.scalar_one_or_none()
+        if not user:
+            await message.answer(f"❌ المستخدم {target_id} غير موجود.")
+            return
         user.balance = max((_D(str(user.balance or 0)) - amount), _D("0"))
+        # Create debit transaction record
+        from models.transaction import Transaction as _Tx
+        db.add(_Tx(user_id=target_id, amount=-amount, description="خصم من المالك"))
         await db.commit()
+        await db.refresh(user)
         _inv_cache(target_id)
         emoji = "➖"
 

@@ -127,25 +127,45 @@ async def add_balance(
     external_ref: str | None = None,
 ) -> User:
     """
-    Credit user balance and create a Transaction record.
+    Credit (or debit when amount<0) user balance and create a Transaction record.
 
-    If `external_ref` is provided (e.g. Telegram Stars charge id, Binance trade no),
-    the call is idempotent: a duplicate ref returns the user untouched instead of
-    crediting twice. This protects against duplicate Telegram update delivery.
+    If `external_ref` is provided the call is idempotent: a duplicate ref returns
+    the user untouched instead of crediting twice (protects against double-delivery).
+
+    IMPORTANT: always uses a fresh SELECT … FOR UPDATE — never the in-memory cache.
+    Cached objects are bound to a previous session; writing to them silently skips
+    the DB commit because the current session never tracks those changes.
     """
-    # Idempotency: if a transaction with this external_ref already exists, skip.
+    # ── Idempotency ───────────────────────────────────────────────────────────
     if external_ref:
         existing = await db.execute(
             select(Transaction).where(Transaction.external_ref == external_ref)
         )
         if existing.scalar_one_or_none():
             logger.info(
-                "add_balance: duplicate external_ref=%s for user=%s — skipping credit",
+                "add_balance: duplicate external_ref=%s for user=%s — skipping",
                 external_ref, user_id,
             )
-            return await get_or_create_user(db, user_id)
+            # Return current user from THIS session (not cache)
+            result = await db.execute(select(User).where(User.id == user_id))
+            u = result.scalar_one_or_none()
+            return u or await get_or_create_user(db, user_id)
 
-    user = await get_or_create_user(db, user_id)
+    # ── Fresh locked read — bypass _USER_CACHE for write path ─────────────────
+    # _USER_CACHE stores objects bound to previous sessions. Writing user.balance
+    # on a detached object does NOT persist: the current session never sees it.
+    result = await db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        # First-time user: create via get_or_create_user then re-fetch with lock
+        user = await get_or_create_user(db, user_id)
+        result2 = await db.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )
+        user = result2.scalar_one_or_none() or user
+
     user.balance = Decimal(str(user.balance)) + amount
     tx = Transaction(
         user_id=user_id,
@@ -157,13 +177,14 @@ async def add_balance(
     try:
         await db.commit()
     except Exception as exc:
-        # Likely a unique-constraint race on external_ref.
         await db.rollback()
         logger.warning(
             "add_balance commit failed (likely duplicate external_ref=%s): %s",
             external_ref, exc,
         )
-        return await get_or_create_user(db, user_id)
+        result = await db.execute(select(User).where(User.id == user_id))
+        u = result.scalar_one_or_none()
+        return u or await get_or_create_user(db, user_id)
     await db.refresh(user)
     _USER_CACHE.pop(user_id, None)  # Invalidate after balance change
     return user
