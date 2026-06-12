@@ -144,28 +144,37 @@ _METHOD_NAMES = {
 async def recharge_method_contact(callback: CallbackQuery, db, screen: str = "", from_back: bool = False):
     method = callback.data.split(":")[1]
     nav_enter(callback.from_user.id, f"recharge_method:{method}")
+    await callback.answer()  # Answer immediately — get_chat calls below can be slow
     user = await get_or_create_user(db, callback.from_user.id)
     lang = user.language or "ar"
 
     method_info = _METHOD_NAMES.get(method, {"ar": method, "en": method})
     method_name = method_info["ar"] if lang == "ar" else method_info["en"]
 
+    import asyncio as _asyncio_r
+    async def _fetch_owner(oid):
+        try:
+            return await _asyncio_r.wait_for(callback.bot.get_chat(oid), timeout=3.0)
+        except Exception:
+            return None
+
+    chats = await _asyncio_r.gather(*[_fetch_owner(oid) for oid in OWNER_IDS])
+
     rows: list[list[InlineKeyboardButton]] = []
     owner_lines = []
 
-    for i, owner_id in enumerate(OWNER_IDS, 1):
-        try:
-            chat = await callback.bot.get_chat(owner_id)
+    for i, (owner_id, chat) in enumerate(zip(OWNER_IDS, chats), 1):
+        if chat:
             display_name = chat.first_name or ""
             if getattr(chat, "last_name", None):
                 display_name = f"{display_name} {chat.last_name}".strip()
             display_name = display_name or (chat.username or str(owner_id))
             tag = f"@{chat.username}" if chat.username else f"#{owner_id}"
             link = f"https://t.me/{chat.username}" if chat.username else f"tg://user?id={owner_id}"
-        except Exception:
-            display_name = str(owner_id)
-            tag = f"#{owner_id}"
-            link = f"tg://user?id={owner_id}"
+        else:
+            display_name = SUPPORT_USERNAME.lstrip("@") if SUPPORT_USERNAME else str(owner_id)
+            tag = SUPPORT_USERNAME if SUPPORT_USERNAME else f"#{owner_id}"
+            link = f"https://t.me/{SUPPORT_USERNAME.lstrip('@')}" if SUPPORT_USERNAME else f"tg://user?id={owner_id}"
 
         icons = ["👑", "⚡", "💎", "🔥", "🌟"]
         icon = icons[(i - 1) % len(icons)]
@@ -212,25 +221,33 @@ async def recharge_method_contact(callback: CallbackQuery, db, screen: str = "",
             "◇ ⏰ Available 24/7",
         ])
     await safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
-    await callback.answer()
+    # callback.answer() already called at top of handler
 
 
 @router.callback_query(F.data == "recharge_owner")
 async def recharge_owner(callback: CallbackQuery, db, screen: str = "recharge_owner", from_back: bool = False):
     nav_enter(callback.from_user.id, "recharge_owner")
+    await callback.answer()  # Answer immediately
     user = await get_or_create_user(db, callback.from_user.id)
     lang = user.language or "ar"
     rows: list[list[InlineKeyboardButton]] = []
     owner_lines = []
 
-    for i, owner_id in enumerate(OWNER_IDS, 1):
+    import asyncio as _asyncio_ro
+    async def _get_ro(oid):
         try:
-            chat = await callback.bot.get_chat(owner_id)
+            return await _asyncio_ro.wait_for(callback.bot.get_chat(oid), timeout=3.0)
+        except Exception:
+            return None
+    _ro_chats = await _asyncio_ro.gather(*[_get_ro(oid) for oid in OWNER_IDS])
+
+    for i, (owner_id, chat) in enumerate(zip(OWNER_IDS, _ro_chats), 1):
+        if chat:
             uname = f"@{chat.username}" if chat.username else (chat.first_name or str(owner_id))
             link = f"https://t.me/{chat.username}" if chat.username else f"tg://user?id={owner_id}"
-        except Exception:
-            uname = str(owner_id)
-            link = f"tg://user?id={owner_id}"
+        else:
+            uname = SUPPORT_USERNAME if SUPPORT_USERNAME else str(owner_id)
+            link = f"https://t.me/{SUPPORT_USERNAME.lstrip('@')}" if SUPPORT_USERNAME else f"tg://user?id={owner_id}"
 
         label = f"👨‍💻 المالك {i}: {uname}" if lang == "ar" else f"👨‍💻 Owner {i}: {uname}"
         rows.append([InlineKeyboardButton(text=label, url=link)])
@@ -255,7 +272,7 @@ async def recharge_owner(callback: CallbackQuery, db, screen: str = "recharge_ow
             "💡 Send the amount and payment method to the owner",
         ])
     await safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
-    await callback.answer()
+    # callback.answer() already called at top of handler
 
 
 # ── Binance Pay (2-Step: like smmtarget.net) ──────────────────────────────

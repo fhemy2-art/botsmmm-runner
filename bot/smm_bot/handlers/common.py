@@ -733,29 +733,38 @@ async def show_disclaimer(callback: CallbackQuery, db, screen: str = "disclaimer
 @router.callback_query(F.data == "support")
 async def show_support(callback: CallbackQuery, db, screen: str = "support", from_back: bool = False):
     nav_enter(callback.from_user.id, "support")
+    # Answer immediately so button stops spinning regardless of how long get_chat takes
+    await callback.answer()
     user = await get_or_create_user(db, callback.from_user.id)
     lang = user.language or "ar"
 
-    # Build owner contact lines and buttons
+    # Fetch all owner profiles in PARALLEL with 3-second timeout each
+    import asyncio as _asyncio
+
+    async def _get_owner(owner_id):
+        try:
+            return await _asyncio.wait_for(callback.bot.get_chat(owner_id), timeout=3.0)
+        except Exception:
+            return None
+
+    chats = await _asyncio.gather(*[_get_owner(oid) for oid in OWNER_IDS])
+
     owner_lines = []
     rows: list[list[InlineKeyboardButton]] = []
 
-    for i, owner_id in enumerate(OWNER_IDS, 1):
-        try:
-            chat = await callback.bot.get_chat(owner_id)
-            # Use real name (first + last) instead of @username
+    for i, (owner_id, chat) in enumerate(zip(OWNER_IDS, chats), 1):
+        if chat:
             display_name = chat.first_name or ""
             if getattr(chat, "last_name", None):
                 display_name = f"{display_name} {chat.last_name}".strip()
             display_name = display_name or (chat.username or str(owner_id))
             tag = f"@{chat.username}" if chat.username else f"#{owner_id}"
             link = f"https://t.me/{chat.username}" if chat.username else f"tg://user?id={owner_id}"
-        except Exception:
-            display_name = str(owner_id)
-            tag = f"#{owner_id}"
-            link = f"tg://user?id={owner_id}"
+        else:
+            display_name = SUPPORT_USERNAME.lstrip("@") if SUPPORT_USERNAME else str(owner_id)
+            tag = SUPPORT_USERNAME if SUPPORT_USERNAME else f"#{owner_id}"
+            link = f"https://t.me/{SUPPORT_USERNAME.lstrip('@')}" if SUPPORT_USERNAME else f"tg://user?id={owner_id}"
 
-        # Fancy ranking icons for each admin slot
         icons = ["👑", "⚡", "💎", "🔥", "🌟"]
         icon = icons[(i - 1) % len(icons)]
 
@@ -810,7 +819,7 @@ async def show_support(callback: CallbackQuery, db, screen: str = "support", fro
         ])
 
     await safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=rows))
-    await callback.answer()
+    # callback.answer() already called at the top of this handler
 
 
 # ─── Free balance / Referral ──────────────────────────────────────────────────
@@ -1300,14 +1309,23 @@ async def transfer_confirm_cb(callback: CallbackQuery, db, state: FSMContext):
     except Exception as exc:
         logger.error("transfer_confirm error: %s", exc, exc_info=True)
         await state.clear()
+        _err_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🏠 القائمة الرئيسية" if lang == "ar" else "🏠 Main Menu",
+                callback_data="main_menu",
+            )]
+        ])
+        _err_txt = (
+            "❌ حدث خطأ أثناء التحويل، حاول مجدداً." if lang == "ar"
+            else "❌ Transfer failed, please try again."
+        )
         try:
-            await callback.message.answer(
-                "❌ حدث خطأ أثناء التحويل، حاول مجدداً." if lang == "ar"
-                else "❌ Transfer failed, please try again.",
-                parse_mode="HTML",
-            )
+            await callback.message.edit_text(_err_txt, reply_markup=_err_kb, parse_mode="HTML")
         except Exception:
-            pass
+            try:
+                await callback.message.answer(_err_txt, reply_markup=_err_kb, parse_mode="HTML")
+            except Exception:
+                pass
     finally:
         try:
             await callback.answer()
@@ -1331,13 +1349,23 @@ async def transfer_cancel_cb(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "request_refund")
 async def request_refund(callback: CallbackQuery, db, screen: str = "request_refund", from_back: bool = False):
     nav_enter(callback.from_user.id, "request_refund")
+    await callback.answer()  # Answer immediately to stop spinner
     user = await get_or_create_user(db, callback.from_user.id)
     lang = user.language or "ar"
     rows: list[list[InlineKeyboardButton]] = []
 
-    for i, owner_id in enumerate(OWNER_IDS, 1):
+    import asyncio as _asyncio2
+    async def _gc2(oid):
         try:
-            chat = await callback.bot.get_chat(owner_id)
+            return await _asyncio2.wait_for(callback.bot.get_chat(oid), timeout=3.0)
+        except Exception:
+            return None
+    _chats2 = await _asyncio2.gather(*[_gc2(oid) for oid in OWNER_IDS])
+
+    for i, (owner_id, chat) in enumerate(zip(OWNER_IDS, _chats2), 1):
+        try:
+            if not chat:
+                raise Exception("no chat")
             uname = f"@{chat.username}" if chat.username else (chat.first_name or str(owner_id))
             link = f"https://t.me/{chat.username}" if chat.username else f"tg://user?id={owner_id}"
         except Exception:
