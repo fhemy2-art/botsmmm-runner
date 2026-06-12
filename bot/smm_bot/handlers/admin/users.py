@@ -559,6 +559,8 @@ async def deduct_balance_from_user(message: Message, state: FSMContext, db):
     if user.balance < 0:
         user.balance = Decimal("0")
     await db.commit()
+    from repositories.user_repo import invalidate_user_cache
+    invalidate_user_cache(target_id)  # Keep in-memory cache consistent
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ لوحة الإدارة", callback_data="adm:panel")]
@@ -641,6 +643,7 @@ async def send_broadcast_confirmed(callback: CallbackQuery, state: FSMContext, d
     user_ids = await get_all_user_ids(db)
     wait_msg = await callback.message.answer(f"⏳ جاري الإرسال إلى {len(user_ids):,} مستخدم...")
 
+    import asyncio as _asyncio
     success, failed = 0, 0
     for uid in user_ids:
         try:
@@ -648,6 +651,7 @@ async def send_broadcast_confirmed(callback: CallbackQuery, state: FSMContext, d
             success += 1
         except Exception:
             failed += 1
+        await _asyncio.sleep(0.05)  # Stay under Telegram's 30 msg/sec limit
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ لوحة الإدارة", callback_data="adm:panel")]

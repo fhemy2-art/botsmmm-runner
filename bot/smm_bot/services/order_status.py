@@ -24,6 +24,7 @@ from models.order import Order
 from models.provider import Provider
 from models.user import User
 from repositories.order_repo import get_pending_orders
+from repositories.user_repo import invalidate_user_cache
 from repositories import service_repo
 from services.smm_provider import get_order_status, place_order
 from i18n import t
@@ -169,6 +170,7 @@ async def _refund_and_cancel(db: AsyncSession, bot: Bot | None, order: Order, re
     order.status = "canceled"
     order.last_provider_error = f"auto_refund: {reason}"
     await db.commit()
+    invalidate_user_cache(user.id)  # Keep cache consistent after direct balance update
 
     logger.warning(
         "Auto-refunded order #%s for user %s ($%.2f) — reason=%s",

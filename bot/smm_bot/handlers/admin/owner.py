@@ -458,14 +458,16 @@ async def owner_balance_handler(message: Message, db, state: FSMContext):
         await message.answer(f"❌ المستخدم {target_id} غير موجود.")
         return
 
+    from repositories.user_repo import add_balance as _repo_add_bal, invalidate_user_cache as _inv_cache
     if action == "add":
-        user.balance = (user.balance or 0) + amount
+        user = await _repo_add_bal(db, target_id, amount, "شحن من المالك")
         emoji = "➕"
     else:
-        user.balance = max((user.balance or 0) - amount, 0)
+        from decimal import Decimal as _D
+        user.balance = max((_D(str(user.balance or 0)) - amount), _D("0"))
+        await db.commit()
+        _inv_cache(target_id)
         emoji = "➖"
-
-    await db.commit()
 
     text = card(f"{emoji} تم تعديل الرصيد", [
         f"🆔 المستخدم: <b>{target_id}</b>",
@@ -539,12 +541,14 @@ async def owner_broadcast_handler(message: Message, db, state: FSMContext):
     failed = 0
     status_msg = await message.answer(f"📢 جاري الإرسال لـ {len(user_ids)} مستخدم...")
 
+    import asyncio as _asyncio
     for uid in user_ids:
         try:
             await message.bot.send_message(uid, broadcast_text, parse_mode="HTML")
             sent += 1
         except Exception:
             failed += 1
+        await _asyncio.sleep(0.05)  # Stay under Telegram's 30 msg/sec limit
 
     text = card("📢 نتائج الإرسال الجماعي", [
         f"✅ تم الإرسال: <b>{sent}</b>",
