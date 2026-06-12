@@ -11,7 +11,7 @@ on:
 # This means zero downtime during the 5-hour cycle restart
 concurrency:
   group: smm-bot
-  cancel-in-progress: false
+  cancel-in-progress: true  # New push always replaces old run immediately
 
 jobs:
   run-bot:
