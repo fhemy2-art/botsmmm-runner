@@ -1,17 +1,7 @@
-name: Run SMM Bot
+name: Run SMM Bot (Manual Only)
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '0 */5 * * *'
-  workflow_dispatch:
-
-# Allow concurrent runs so new run starts BEFORE old one stops
-# This means zero downtime during the 5-hour cycle restart
-concurrency:
-  group: smm-bot
-  cancel-in-progress: true  # New push always replaces old run immediately
+  workflow_dispatch:  # Manual trigger only — bot now runs on Railway
 
 jobs:
   run-bot:
@@ -23,7 +13,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Cache virtualenv
         id: cache-venv
@@ -52,14 +42,14 @@ jobs:
           BINANCE_PAY_ID: ${{ secrets.BINANCE_PAY_ID }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
           OWNER_IDS: ${{ secrets.OWNER_IDS }}
-          BOT_NAME: ${{ secrets.BOT_NAME }}
           SUPPORT_USERNAME: ${{ secrets.SUPPORT_USERNAME }}
+          BOT_NAME: ${{ secrets.BOT_NAME }}
           BOT_CHANNEL: ${{ secrets.BOT_CHANNEL }}
-          DEFAULT_MARKUP_PCT: ${{ secrets.DEFAULT_MARKUP_PCT }}
-          SYNC_INTERVAL_MIN: ${{ secrets.SYNC_INTERVAL_MIN }}
-          ORDER_UPDATE_INTERVAL_SEC: ${{ secrets.ORDER_UPDATE_INTERVAL_SEC }}
-          PYTHONUNBUFFERED: "1"
-          PATH: "$HOME/.venv/bin:$PATH"
+          BOT_CHANNEL_URL: ${{ secrets.BOT_CHANNEL_URL }}
+          ACTIVATIONS_CHANNEL: ${{ secrets.ACTIVATIONS_CHANNEL }}
+          ACTIVATIONS_CHANNEL_URL: ${{ secrets.ACTIVATIONS_CHANNEL_URL }}
+          REFERRAL_REWARD: ${{ secrets.REFERRAL_REWARD }}
+          FAZERCARDS_API_KEY: ${{ secrets.FAZERCARDS_API_KEY }}
         run: |
           source ~/.venv/bin/activate
           cd bot && python run.py
