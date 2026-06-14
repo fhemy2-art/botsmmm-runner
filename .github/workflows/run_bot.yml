@@ -1,10 +1,9 @@
-name: Run SMM Bot (Backup — Railway is primary)
+name: Run SMM Bot
 
 on:
   push:
     branches: [main]
   schedule:
-    # Restart every 5 hours (GitHub Actions 6h limit)
     - cron: "0 */5 * * *"
   workflow_dispatch:
 
@@ -44,25 +43,18 @@ jobs:
 
       - name: Run bot
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          BOT_DATABASE_URL: ${{ secrets.BOT_DATABASE_URL }}
-          DATABASE_URL: ${{ secrets.BOT_DATABASE_URL }}
-          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
-          BINANCE_PAY_ID: ${{ secrets.BINANCE_PAY_ID }}
-          BINANCE_PAY_MERCHANT_ENABLED: ${{ secrets.BINANCE_PAY_MERCHANT_ENABLED }}
-          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
-          OWNER_IDS: ${{ secrets.OWNER_IDS }}
-          SUPPORT_USERNAME: ${{ secrets.SUPPORT_USERNAME }}
-          BOT_NAME: ${{ secrets.BOT_NAME }}
-          BOT_CHANNEL: ${{ secrets.BOT_CHANNEL }}
-          BOT_CHANNEL_URL: ${{ secrets.BOT_CHANNEL_URL }}
-          ACTIVATIONS_CHANNEL: ${{ secrets.ACTIVATIONS_CHANNEL }}
-          ACTIVATIONS_CHANNEL_URL: ${{ secrets.ACTIVATIONS_CHANNEL_URL }}
-          REFERRAL_REWARD: ${{ secrets.REFERRAL_REWARD }}
-          FAZERCARDS_API_KEY: ${{ secrets.FAZERCARDS_API_KEY }}
-          DEFAULT_MARKUP_PCT: ${{ secrets.DEFAULT_MARKUP_PCT }}
-          SYNC_INTERVAL_MIN: ${{ secrets.SYNC_INTERVAL_MIN }}
+          BOT_TOKEN:              ${{ secrets.BOT_TOKEN }}
+          BOT_DATABASE_URL:       ${{ secrets.BOT_DATABASE_URL }}
+          DATABASE_URL:           ${{ secrets.BOT_DATABASE_URL }}
+          ADMIN_IDS:              ${{ secrets.ADMIN_IDS }}
+          OWNER_IDS:              ${{ secrets.OWNER_IDS }}
+          BOT_NAME:               ${{ secrets.BOT_NAME }}
+          BOT_CHANNEL:            ${{ secrets.BOT_CHANNEL }}
+          SUPPORT_USERNAME:       ${{ secrets.SUPPORT_USERNAME }}
+          BINANCE_API_KEY:        ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_PAY_ID:         ${{ secrets.BINANCE_PAY_ID }}
+          DEFAULT_MARKUP_PCT:     ${{ secrets.DEFAULT_MARKUP_PCT }}
+          SYNC_INTERVAL_MIN:      ${{ secrets.SYNC_INTERVAL_MIN }}
           ORDER_UPDATE_INTERVAL_SEC: ${{ secrets.ORDER_UPDATE_INTERVAL_SEC }}
         run: |
           source ~/.venv/bin/activate
