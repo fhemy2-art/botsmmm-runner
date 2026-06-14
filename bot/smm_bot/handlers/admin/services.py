@@ -219,7 +219,7 @@ async def smm_section_panel(callback: CallbackQuery, db):
         ],
         [
             InlineKeyboardButton(text="🔄 مزامنة جميع المزودين", callback_data="adm:sync"),
-            InlineKeyboardButton(text="🎁 خدمات مجانية", callback_data="adm:seed_free"),
+            InlineKeyboardButton(text="🔌 مزودون موصى بهم", callback_data="adm:provider_presets"),
         ],
         # ── الخدمات ──
         [InlineKeyboardButton(text="──── 📦 الخدمات ────", callback_data="noop")],
@@ -2014,62 +2014,6 @@ async def delete_provider(callback: CallbackQuery, db):
             _kb(back=f"adm:provedит:{pid}"),
         )
 
-
-
-# ════════════════════════════════════════════════════════════════
-#  SEED FREE SERVICES
-# ════════════════════════════════════════════════════════════════
-
-@router.callback_query(F.data == "adm:seed_free")
-async def seed_free_services_cb(callback: CallbackQuery, db):
-    if not _admin_only(callback):
-        return
-    await callback.answer()
-    from services.free_services_seeder import seed_free_services, get_provider_presets
-
-    await _safe_edit(callback, "⏳ جارٍ إضافة الخدمات المجانية...", InlineKeyboardMarkup(inline_keyboard=[]))
-
-    added, skipped = await seed_free_services(db)
-
-    presets = get_provider_presets()
-    preset_lines = ""
-    for p in presets:
-        preset_lines += f"\n│  • <b>{p['name']}</b>\n│    {p['api_url']}"
-
-    text = (
-        "┌──── 🎁 الخدمات المجانية ────\n"
-        f"│  ✅ تمت الإضافة: <b>{added}</b>\n"
-        f"│  موجودة مسبقاً: <b>{skipped}</b>\n"
-        "├──────────────────────\n"
-        "│  مزودون موصى بهم (مجاني/رخيص):"
-        f"{preset_lines}\n"
-        "└──────────────────────"
-    )
-    await _safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔌 إضافة مزود", callback_data="adm:add_provider")],
-        [InlineKeyboardButton(text="◀️ لوحة الإدارة", callback_data="adm:panel")],
-    ]))
-
-
-@router.callback_query(F.data == "adm:provider_presets")
-async def provider_presets_cb(callback: CallbackQuery, db):
-    if not _admin_only(callback):
-        return
-    await callback.answer()
-    from services.free_services_seeder import get_provider_presets
-
-    presets = get_provider_presets()
-    lines = ["┌──── 🔌 مزودون موصى بهم ────\n│"]
-    buttons = []
-    for p in presets:
-        lines.append(f"│  📡 <b>{p['name']}</b>\n│  <code>{p['api_url']}</code>\n│  💡 {p['note']}")
-        lines.append("├──────────────────────")
-    text = "\n".join(lines) + "\n└──────────────────────"
-
-    buttons.append([InlineKeyboardButton(text="➕ إضافة مزود جديد", callback_data="adm:add_provider")])
-    buttons.append([InlineKeyboardButton(text="🎁 بذر الخدمات المجانية", callback_data="adm:seed_free")])
-    buttons.append([InlineKeyboardButton(text="◀️ رجوع", callback_data="adm:providers_list")])
-    await _safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 # ════════════════════════════════════════════════════════════════

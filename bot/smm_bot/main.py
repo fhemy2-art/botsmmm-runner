@@ -210,6 +210,17 @@ async def on_startup(bot: Bot) -> None:
     except Exception as exc:
         logger.warning("Failed to set commands: %s", exc)
 
+    # ─── Cleanup fake free services (one-time, idempotent) ───────────────────
+    try:
+        from database import get_db_session
+        from services.free_services_seeder import delete_fake_free_services
+        async with get_db_session() as _db:
+            _deleted = await delete_fake_free_services(_db)
+            if _deleted:
+                logger.info("Startup cleanup: deleted %s fake free services", _deleted)
+    except Exception as _e:
+        logger.warning("Startup cleanup skipped: %s", _e)
+
     # ─── Notify admins ─────────────────────────────────────────────────────────
     for admin_id in ADMIN_IDS:
         try:

@@ -445,8 +445,9 @@ async def auto_add_services(db: AsyncSession) -> tuple[int, int, dict[str, int]]
             for ps in candidates:
                 if added_in_group >= AUTO_ADD_PER_GROUP:
                     break
-                if not ps.rate or float(ps.rate) <= 0:
+                if ps.rate is None:
                     continue
+                # rate=0 is valid — free service from provider
 
                 already = await db.scalar(
                     select(func.count()).select_from(Service)
