@@ -219,6 +219,7 @@ async def smm_section_panel(callback: CallbackQuery, db):
         ],
         [
             InlineKeyboardButton(text="🔄 مزامنة جميع المزودين", callback_data="adm:sync"),
+            InlineKeyboardButton(text="🎁 خدمات مجانية", callback_data="adm:seed_free"),
         ],
         # ── الخدمات ──
         [InlineKeyboardButton(text="──── 📦 الخدمات ────", callback_data="noop")],
@@ -1893,6 +1894,7 @@ async def sync_one_provider(callback: CallbackQuery, db):
         return
     from repositories.provider_repo import get_provider
     from services.provider_manager import sync_provider_services
+    from services.service_manager import auto_add_services
 
     pid = int(callback.data.split(":")[2])
     p = await get_provider(db, pid)
@@ -1900,20 +1902,42 @@ async def sync_one_provider(callback: CallbackQuery, db):
         await callback.answer("المزود غير موجود")
         return
 
-    await _safe_edit(callback, f"⏳ مزامنة {p.name}...", InlineKeyboardMarkup(inline_keyboard=[]))
+    await _safe_edit(
+        callback,
+        f"⏳ جارٍ مزامنة <b>{p.name}</b>\nانتظر...",
+        InlineKeyboardMarkup(inline_keyboard=[]),
+    )
     await callback.answer()
 
+    new_ps = 0
+    added_svcs = 0
+    skipped = 0
+    error_msg = ""
     try:
-        new_count = await sync_provider_services(db, p)
+        new_ps = await sync_provider_services(db, p)
+        if new_ps > 0 or True:  # always try to auto-add after sync
+            added_svcs, skipped, _ = await auto_add_services(db)
     except Exception as exc:
-        new_count = 0
-        logger.error("sync_provider error: %s", exc)
+        await db.rollback()
+        error_msg = str(exc)[:150]
+        logger.error("sync_provider pid=%s: %s", pid, exc, exc_info=True)
 
-    text = (
-        f"┌──── ✅ مزامنة {p.name} ────\n"
-        f"│  خدمات جديدة: <b>{new_count:,}</b>\n"
-        "└──────────────────────"
-    )
+    if error_msg:
+        text = (
+            f"┌──── ⚠️ مزامنة {p.name} ────\n"
+            f"│  خطأ: <code>{error_msg}</code>\n"
+            "└──────────────────────"
+        )
+    else:
+        text = (
+            f"┌──── ✅ مزامنة {p.name} ────\n"
+            f"│  خدمات المزود: <b>{new_ps:,}</b>\n"
+            f"│  أُضيف للمتجر: <b>{added_svcs:,}</b>\n"
+            f"│  موجود مسبقاً: <b>{skipped:,}</b>\n"
+            "│\n"
+            "│  ✅ الخدمات تظهر الآن للمستخدمين\n"
+            "└──────────────────────"
+        )
     await _safe_edit(callback, text, _kb(back=f"adm:provedит:{pid}"))
 
 
@@ -1921,34 +1945,131 @@ async def sync_one_provider(callback: CallbackQuery, db):
 async def delete_provider(callback: CallbackQuery, db):
     if not _admin_only(callback):
         return
+    await callback.answer()  # Answer immediately
     from repositories.provider_repo import get_provider
-    from sqlalchemy import delete as sa_delete
+    from sqlalchemy import delete as sa_delete, update as sa_update
+    from models.order import Order
+
     pid = int(callback.data.split(":")[2])
     p = await get_provider(db, pid)
-    if p:
-        # Cascade delete: services → provider_services → provider
-        # 1. Get all provider_service IDs for this provider
+    if not p:
+        await _safe_edit(callback, "❌ المزود غير موجود", _kb(back="adm:providers_list"))
+        return
+
+    pname = p.name
+    try:
         ps_ids_result = await db.execute(
             select(ProviderService.id).where(ProviderService.provider_id == pid)
         )
         ps_ids = [r[0] for r in ps_ids_result.all()]
-        
-        # 2. Delete store services that reference these provider_services
+        soft_deleted = hard_deleted = 0
+
         if ps_ids:
-            await db.execute(
-                sa_delete(Service).where(Service.provider_service_id.in_(ps_ids))
+            svc_ids_result = await db.execute(
+                select(Service.id).where(Service.provider_service_id.in_(ps_ids))
             )
-        
-        # 3. Delete provider_services
-        await db.execute(
-            sa_delete(ProviderService).where(ProviderService.provider_id == pid)
-        )
-        
-        # 4. Delete the provider itself
+            svc_ids = [r[0] for r in svc_ids_result.all()]
+
+            if svc_ids:
+                orders_result = await db.execute(
+                    select(Order.service_id).where(Order.service_id.in_(svc_ids)).distinct()
+                )
+                services_with_orders = {r[0] for r in orders_result.all()}
+
+                if services_with_orders:
+                    await db.execute(
+                        sa_update(Service)
+                        .where(Service.id.in_(list(services_with_orders)))
+                        .values(is_active=False, provider_service_id=None)
+                    )
+                    soft_deleted = len(services_with_orders)
+
+                clean_ids = [sid for sid in svc_ids if sid not in services_with_orders]
+                if clean_ids:
+                    await db.execute(sa_delete(Service).where(Service.id.in_(clean_ids)))
+                    hard_deleted = len(clean_ids)
+
+            await db.execute(sa_delete(ProviderService).where(ProviderService.provider_id == pid))
+
         await db.delete(p)
         await db.commit()
-        await callback.answer("🗑 تم حذف المزود وخدماته", show_alert=True)
-    await providers_list(callback, db)
+
+        note = ""
+        if soft_deleted:
+            note = f"\n│  ⚠️ {soft_deleted:,} خدمة مخفية (لها طلبات قديمة)"
+        text = (
+            f"┌──── ✅ تم حذف المزود ────\n"
+            f"│  <b>{pname}</b>\n"
+            f"│  خدمات محذوفة: <b>{hard_deleted:,}</b>{note}\n"
+            "└──────────────────────"
+        )
+        await _safe_edit(callback, text, _kb(back="adm:providers_list"))
+
+    except Exception as exc:
+        await db.rollback()
+        logger.error("delete_provider pid=%s: %s", pid, exc, exc_info=True)
+        await _safe_edit(
+            callback,
+            f"❌ خطأ في الحذف:\n<code>{str(exc)[:300]}</code>",
+            _kb(back=f"adm:provedит:{pid}"),
+        )
+
+
+
+# ════════════════════════════════════════════════════════════════
+#  SEED FREE SERVICES
+# ════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "adm:seed_free")
+async def seed_free_services_cb(callback: CallbackQuery, db):
+    if not _admin_only(callback):
+        return
+    await callback.answer()
+    from services.free_services_seeder import seed_free_services, get_provider_presets
+
+    await _safe_edit(callback, "⏳ جارٍ إضافة الخدمات المجانية...", InlineKeyboardMarkup(inline_keyboard=[]))
+
+    added, skipped = await seed_free_services(db)
+
+    presets = get_provider_presets()
+    preset_lines = ""
+    for p in presets:
+        preset_lines += f"\n│  • <b>{p['name']}</b>\n│    {p['api_url']}"
+
+    text = (
+        "┌──── 🎁 الخدمات المجانية ────\n"
+        f"│  ✅ تمت الإضافة: <b>{added}</b>\n"
+        f"│  موجودة مسبقاً: <b>{skipped}</b>\n"
+        "├──────────────────────\n"
+        "│  مزودون موصى بهم (مجاني/رخيص):"
+        f"{preset_lines}\n"
+        "└──────────────────────"
+    )
+    await _safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔌 إضافة مزود", callback_data="adm:add_provider")],
+        [InlineKeyboardButton(text="◀️ لوحة الإدارة", callback_data="adm:panel")],
+    ]))
+
+
+@router.callback_query(F.data == "adm:provider_presets")
+async def provider_presets_cb(callback: CallbackQuery, db):
+    if not _admin_only(callback):
+        return
+    await callback.answer()
+    from services.free_services_seeder import get_provider_presets
+
+    presets = get_provider_presets()
+    lines = ["┌──── 🔌 مزودون موصى بهم ────\n│"]
+    buttons = []
+    for p in presets:
+        lines.append(f"│  📡 <b>{p['name']}</b>\n│  <code>{p['api_url']}</code>\n│  💡 {p['note']}")
+        lines.append("├──────────────────────")
+    text = "\n".join(lines) + "\n└──────────────────────"
+
+    buttons.append([InlineKeyboardButton(text="➕ إضافة مزود جديد", callback_data="adm:add_provider")])
+    buttons.append([InlineKeyboardButton(text="🎁 بذر الخدمات المجانية", callback_data="adm:seed_free")])
+    buttons.append([InlineKeyboardButton(text="◀️ رجوع", callback_data="adm:providers_list")])
+    await _safe_edit(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2035,6 +2156,9 @@ async def add_provider_key(message: Message, state: FSMContext, db):
     await state.clear()
 
     from models.provider import Provider
+    from services.provider_manager import sync_provider_services
+    from services.service_manager import auto_add_services
+
     provider = Provider(
         name=data["name"],
         api_url=data["api_url"],
@@ -2043,18 +2167,43 @@ async def add_provider_key(message: Message, state: FSMContext, db):
     )
     db.add(provider)
     await db.commit()
+    await db.refresh(provider)
 
     try:
         await message.delete()
     except Exception:
         pass
 
+    # Show "syncing..." message immediately
+    adding_text = (
+        "┌──── ⏳ جارٍ المزامنة ────\n"
+        f"│  المزود: <b>{data['name']}</b>\n"
+        "│  يتم جلب الخدمات الآن...\n"
+        "└──────────────────────"
+    )
+    try:
+        await message.bot.edit_message_text(
+            chat_id=data["ui_chat_id"], message_id=data["ui_message_id"],
+            text=adding_text, parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    # Auto-sync immediately
+    new_ps = added_svcs = 0
+    sync_note = ""
+    try:
+        new_ps = await sync_provider_services(db, provider)
+        added_svcs, _, _ = await auto_add_services(db)
+        sync_note = f"\n│  خدمات المزود: <b>{new_ps:,}</b>\n│  أُضيف للمتجر: <b>{added_svcs:,}</b>"
+    except Exception as exc:
+        logger.warning("Auto-sync after add_provider: %s", exc)
+        sync_note = "\n│  ⚠️ لم تكتمل المزامنة — استخدم 🔄 مزامنة"
+
     text = (
         "┌──── ✅ تمت الإضافة ────\n"
         f"│  الاسم: <b>{data['name']}</b>\n"
-        f"│  الرابط: {data['api_url']}\n"
-        "│\n"
-        "│  يمكنك الآن مزامنة الخدمات.\n"
+        f"│  الرابط: {data['api_url']}{sync_note}\n"
         "└──────────────────────"
     )
     try:
@@ -2062,7 +2211,8 @@ async def add_provider_key(message: Message, state: FSMContext, db):
             chat_id=data["ui_chat_id"], message_id=data["ui_message_id"],
             text=text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 مزامنة الآن", callback_data="adm:sync")],
+                [InlineKeyboardButton(text="🔄 مزامنة مجدداً", callback_data=f"adm:provsync:{provider.id}")],
+                [InlineKeyboardButton(text="🔌 إدارة المزودين", callback_data="adm:providers_list")],
                 [InlineKeyboardButton(text="◀️ لوحة الإدارة", callback_data="adm:panel")],
             ]),
             parse_mode="HTML",
@@ -2071,7 +2221,7 @@ async def add_provider_key(message: Message, state: FSMContext, db):
         await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ لوحة الإدارة", callback_data="adm:panel")],
         ]))
-    logger.info("Provider added: %s (%s)", data["name"], data["api_url"])
+    logger.info("Provider added+synced: %s (%s) new_ps=%s added=%s", data["name"], data["api_url"], new_ps, added_svcs)
 
 
 # ════════════════════════════════════════════════════════════════
