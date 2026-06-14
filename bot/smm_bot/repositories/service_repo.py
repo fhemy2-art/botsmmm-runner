@@ -274,3 +274,43 @@ async def get_platform_service_counts(db: AsyncSession) -> list[tuple[str, int]]
         .order_by(Service.platform)
     )
     return result.all()
+
+
+async def get_free_services_page(
+    db: AsyncSession,
+    page: int,
+    per_page: int,
+) -> tuple[list["Service"], int]:
+    """Return all active free ($0) services, ordered by platform then category."""
+    from decimal import Decimal
+    filters = [
+        Service.is_active == True,
+        Service.price_per_1000 == Decimal("0"),
+    ]
+    total = await db.scalar(
+        select(func.count()).select_from(Service).where(*filters)
+    ) or 0
+    result = await db.execute(
+        select(Service)
+        .where(*filters)
+        .order_by(Service.platform, Service.category, Service.id)
+        .offset(page * per_page)
+        .limit(per_page)
+    )
+    return result.scalars().all(), total
+
+
+async def get_free_services_by_platform(
+    db: AsyncSession,
+) -> dict[str, list["Service"]]:
+    """Return all free services grouped by platform {platform: [Service...]}."""
+    from decimal import Decimal
+    result = await db.execute(
+        select(Service)
+        .where(Service.is_active == True, Service.price_per_1000 == Decimal("0"))
+        .order_by(Service.platform, Service.category, Service.id)
+    )
+    grouped: dict[str, list] = {}
+    for svc in result.scalars().all():
+        grouped.setdefault(svc.platform, []).append(svc)
+    return grouped

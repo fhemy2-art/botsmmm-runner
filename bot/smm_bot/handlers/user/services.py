@@ -14,6 +14,7 @@ from repositories.service_repo import (
     get_service,
     get_provider_service,
     get_service_stats,
+    get_free_services_by_platform,
 )
 from config import SERVICES_PER_PAGE, BOT_NAME
 from i18n import get_vip_level, get_vip_pct, get_vip_name, convert_price, price_in_currency
@@ -47,6 +48,14 @@ PLATFORMS = {
     "linkedin":   {"ar": "لينكدإن",     "en": "LinkedIn",    "ico": "💼🔗"},
     "soundcloud": {"ar": "ساوند كلاود", "en": "SoundCloud",  "ico": "🎵☁️"},
     "other":      {"ar": "خدمات أخرى",  "en": "Other",       "ico": "📦✨"},
+}
+
+# ─── Free platform emoji map ────────────────────────────────────────────────
+_PLAT_EMOJI = {
+    "instagram": "📸", "tiktok": "🎵", "telegram": "💬", "youtube": "▶️",
+    "twitter": "🐦",  "facebook": "📘","whatsapp": "💚",  "threads": "🔗",
+    "snapchat": "👻",  "linkedin": "💼","spotify": "🎧",  "discord": "🎮",
+    "other": "📦",
 }
 
 
@@ -542,6 +551,162 @@ _SORT_LABELS = {
 _VALID_SORTS = ("best", "cheap", "fast", "guarantee")
 
 
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  🎁 FREE SERVICES — plt:free
+# ═════════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "plt:free")
+async def show_free_services(cb: CallbackQuery, db, screen=None, from_back=False):
+    """Show all free ($0) services grouped by platform."""
+    nav_enter(cb.from_user.id, "plt:free", push=not from_back)
+    user = await get_or_create_user(db, cb.from_user.id)
+    lang = user.language or "ar"
+
+    grouped = await get_free_services_by_platform(db)
+    total_count = sum(len(v) for v in grouped.values())
+
+    if not grouped:
+        txt = _L(lang,
+            "🎁 <b>الخدمات المجانية</b>\n\nلا توجد خدمات مجانية بعد.\nاطلب من الأدمن تفعيلها.",
+            "🎁 <b>Free Services</b>\n\nNo free services yet.\nAsk admin to activate them.")
+        await safe_edit(cb, txt, InlineKeyboardMarkup(inline_keyboard=[_footer(lang)]))
+        return await cb.answer()
+
+    header = _L(lang,
+        "\u256d\u2500\u2500\u2500\u2500 \U0001f381 <b>\u0627\u0644\u062e\u062f\u0645\u0627\u062a \u0627\u0644\u0645\u062c\u0627\u0646\u064a\u0629</b> \u2500\u2500\u2500\u2500\n"
+        f"\u2502  \u2705 <b>{total_count}</b> \u062e\u062f\u0645\u0629 \u0645\u062c\u0627\u0646\u064a\u0629 \u0645\u062a\u0627\u062d\u0629\n"
+        "\u2502  \U0001f552 \u0648\u0642\u062a \u0627\u0644\u062a\u0633\u0644\u064a\u0645: 1\u201324 \u0633\u0627\u0639\u0629\n"
+        "\u2502  \u26a0\ufe0f \u0645\u0631\u0629 \u0648\u0627\u062d\u062f\u0629 \u0644\u0643\u0644 \u062e\u062f\u0645\u0629 \u0644\u0643\u0644 \u0645\u0633\u062a\u062e\u062f\u0645\n"
+        "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "\u25c6 <b>\u0627\u062e\u062a\u0631 \u0627\u0644\u0645\u0646\u0635\u0629:</b>",
+        "\u256d\u2500\u2500\u2500\u2500 \U0001f381 <b>Free Services</b> \u2500\u2500\u2500\u2500\n"
+        f"\u2502  \u2705 <b>{total_count}</b> free services available\n"
+        "\u2502  \U0001f552 Delivery: 1\u201324 hours\n"
+        "\u2502  \u26a0\ufe0f Once per service per user\n"
+        "\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        "\u25c6 <b>Choose a platform:</b>")
+
+    _ORDER = ["instagram", "tiktok", "telegram", "youtube", "twitter",
+              "facebook", "snapchat", "whatsapp", "threads", "spotify",
+              "linkedin", "discord", "other"]
+
+    kb = []
+    row = []
+    for plat in _ORDER:
+        svcs = grouped.get(plat)
+        if not svcs:
+            continue
+        ico = _PLAT_EMOJI.get(plat, "\U0001f4e6")
+        plat_info = PLATFORMS.get(plat, {"ar": plat, "en": plat})
+        label = _L(lang,
+            f"{ico} {plat_info['ar']} ({len(svcs)})",
+            f"{ico} {plat_info['en']} ({len(svcs)})")
+        row.append(InlineKeyboardButton(text=label, callback_data=f"free_plat:{plat}:0"))
+        if len(row) >= 2:
+            kb.append(row)
+            row = []
+    if row:
+        kb.append(row)
+    kb.append(_footer(lang))
+    await safe_edit(cb, header, InlineKeyboardMarkup(inline_keyboard=kb))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("free_plat:"))
+async def show_free_platform(cb: CallbackQuery, db, screen=None, from_back=False):
+    """List free services for a specific platform."""
+    parts = cb.data.split(":")
+    plat = parts[1]
+    page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    PER_PAGE = 10
+    nav_enter(cb.from_user.id, cb.data, push=not from_back)
+    user = await get_or_create_user(db, cb.from_user.id)
+    lang = user.language or "ar"
+    grouped = await get_free_services_by_platform(db)
+    all_svcs = grouped.get(plat, [])
+    if not all_svcs:
+        await cb.answer(_L(lang, "لا توجد خدمات مجانية", "No free services"), show_alert=True)
+        return
+    total = len(all_svcs)
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    page_svcs = all_svcs[page * PER_PAGE:(page + 1) * PER_PAGE]
+    ico = _PLAT_EMOJI.get(plat, "\U0001f4e6")
+    plat_info = PLATFORMS.get(plat, {"ar": plat, "en": plat})
+    header = _L(lang,
+        f"\U0001f381 <b>\u062e\u062f\u0645\u0627\u062a \u0645\u062c\u0627\u0646\u064a\u0629</b> \u2014 {ico} <b>{plat_info['ar']}</b>\n"
+        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        f"\U0001f4c4 \u0627\u0644\u0635\u0641\u062d\u0629 {page+1}/{pages}\n"
+        "\u2193 <b>\u0627\u062e\u062a\u0631 \u062e\u062f\u0645\u0629:</b>",
+        f"\U0001f381 <b>Free Services</b> \u2014 {ico} <b>{plat_info['en']}</b>\n"
+        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        f"\U0001f4c4 Page {page+1}/{pages}\n"
+        "\u2193 <b>Tap a service to order:</b>")
+    kb = []
+    for svc in page_svcs:
+        kb.append([InlineKeyboardButton(
+            text=f"\U0001f381 {svc.name}",
+            callback_data=f"free_sd:{svc.id}:{plat}:{page}")])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="\u25c0\ufe0f", callback_data=f"free_plat:{plat}:{page-1}"))
+        nav.append(InlineKeyboardButton(text=f"\U0001f4c4 {page+1}/{pages}", callback_data="noop"))
+        if page + 1 < pages:
+            nav.append(InlineKeyboardButton(text="\u25b6\ufe0f", callback_data=f"free_plat:{plat}:{page+1}"))
+        kb.append(nav)
+    kb.append([InlineKeyboardButton(
+        text=_L(lang, "\u25c0\ufe0f \u0627\u0644\u062e\u062f\u0645\u0627\u062a \u0627\u0644\u0645\u062c\u0627\u0646\u064a\u0629", "\u25c0\ufe0f Free Services"),
+        callback_data="plt:free")])
+    kb.append(_footer(lang))
+    await safe_edit(cb, header, InlineKeyboardMarkup(inline_keyboard=kb))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("free_sd:"))
+async def show_free_service_detail(cb: CallbackQuery, db):
+    """Show detail for a free service and allow ordering."""
+    parts = cb.data.split(":")
+    sid = int(parts[1])
+    plat = parts[2] if len(parts) > 2 else ""
+    page = parts[3] if len(parts) > 3 else "0"
+    user = await get_or_create_user(db, cb.from_user.id)
+    lang = user.language or "ar"
+    svc = await get_service(db, sid)
+    if not svc:
+        await cb.answer(_L(lang, "الخدمة غير موجودة", "Service not found"), show_alert=True)
+        return
+    ico = _PLAT_EMOJI.get(plat, "\U0001f4e6")
+    plat_info = PLATFORMS.get(plat, {"ar": plat, "en": plat})
+    desc = (svc.description or "")[:120]
+    text = (
+        f"\U0001f381 <b>{svc.name}</b>\n"
+        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        + (f"\U0001f4dd {desc}\n\n" if desc else "\n")
+        + _L(lang,
+            f"\U0001f4b0 \u0627\u0644\u0633\u0639\u0631: <b>\U0001f195 \u0645\u062c\u0627\u0646\u064a \U0001f195</b>\n"
+            f"{ico} \u0627\u0644\u0645\u0646\u0635\u0629: <b>{plat_info['ar']}</b>\n"
+            "\u23f1 \u0627\u0644\u062a\u0633\u0644\u064a\u0645: <b>1\u201324 \u0633\u0627\u0639\u0629</b>\n"
+            "\u26a0\ufe0f \u0645\u0631\u0629 \u0648\u0627\u062d\u062f\u0629 \u0641\u0642\u0637 \u0644\u0643\u0644 \u0645\u0633\u062a\u062e\u062f\u0645",
+            f"\U0001f4b0 Price: <b>\U0001f195 FREE \U0001f195</b>\n"
+            f"{ico} Platform: <b>{plat_info['en']}</b>\n"
+            "\u23f1 Delivery: <b>1\u201324 hours</b>\n"
+            "\u26a0\ufe0f Once per user per service")
+    )
+    kb = [
+        [InlineKeyboardButton(
+            text=_L(lang, "\U0001f6d2 \u2756 \u0627\u0637\u0644\u0628 \u0645\u062c\u0627\u0646\u0627\u064b \u2756", "\U0001f6d2 \u2756 Order Free \u2756"),
+            callback_data=f"order:{svc.id}")],
+        [InlineKeyboardButton(
+            text=_L(lang, "\u25c0\ufe0f \u0631\u062c\u0648\u0639", "\u25c0\ufe0f Back"),
+            callback_data=f"free_plat:{plat}:{page}")],
+        _footer(lang),
+    ]
+    await safe_edit(cb, text, InlineKeyboardMarkup(inline_keyboard=kb))
+    await cb.answer()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  1 · PLATFORMS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -601,6 +766,12 @@ async def show_platforms(cb: CallbackQuery, db, screen="new_order", from_back=Fa
         "╚══════════════════════════╝")
 
     kb = []
+
+    # ── 🎁 Free services — always pinned at top ──
+    kb.append([InlineKeyboardButton(
+        text=_L(lang, "🎁 ✦ خدمات مجانية ✦ 🎁", "🎁 ✦ Free Services ✦ 🎁"),
+        callback_data="plt:free")])
+
     row = []
     for k, v in avail:
         custom_name = settings_manager.get_platform_custom_name(k)
