@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "0 */5 * * *"
+    # Restart every 4 hours (well before the 6h Actions limit)
+    - cron: "0 */4 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -14,7 +15,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 350
 
     steps:
       - uses: actions/checkout@v4
@@ -41,21 +42,40 @@ jobs:
           ~/.venv/bin/pip install --upgrade pip
           ~/.venv/bin/pip install -r bot/requirements.txt
 
-      - name: Run bot
+      - name: Run bot (with auto-restart on crash)
         env:
-          BOT_TOKEN:              ${{ secrets.BOT_TOKEN }}
-          BOT_DATABASE_URL:       ${{ secrets.BOT_DATABASE_URL }}
-          DATABASE_URL:           ${{ secrets.BOT_DATABASE_URL }}
-          ADMIN_IDS:              ${{ secrets.ADMIN_IDS }}
-          OWNER_IDS:              ${{ secrets.OWNER_IDS }}
-          BOT_NAME:               ${{ secrets.BOT_NAME }}
-          BOT_CHANNEL:            ${{ secrets.BOT_CHANNEL }}
-          SUPPORT_USERNAME:       ${{ secrets.SUPPORT_USERNAME }}
-          BINANCE_API_KEY:        ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_PAY_ID:         ${{ secrets.BINANCE_PAY_ID }}
-          DEFAULT_MARKUP_PCT:     ${{ secrets.DEFAULT_MARKUP_PCT }}
-          SYNC_INTERVAL_MIN:      ${{ secrets.SYNC_INTERVAL_MIN }}
+          BOT_TOKEN:                 ${{ secrets.BOT_TOKEN }}
+          BOT_DATABASE_URL:          ${{ secrets.BOT_DATABASE_URL }}
+          DATABASE_URL:              ${{ secrets.BOT_DATABASE_URL }}
+          ADMIN_IDS:                 ${{ secrets.ADMIN_IDS }}
+          OWNER_IDS:                 ${{ secrets.OWNER_IDS }}
+          BOT_NAME:                  ${{ secrets.BOT_NAME }}
+          BOT_CHANNEL:               ${{ secrets.BOT_CHANNEL }}
+          SUPPORT_USERNAME:          ${{ secrets.SUPPORT_USERNAME }}
+          BINANCE_API_KEY:           ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_PAY_ID:            ${{ secrets.BINANCE_PAY_ID }}
+          DEFAULT_MARKUP_PCT:        ${{ secrets.DEFAULT_MARKUP_PCT }}
+          SYNC_INTERVAL_MIN:         ${{ secrets.SYNC_INTERVAL_MIN }}
           ORDER_UPDATE_INTERVAL_SEC: ${{ secrets.ORDER_UPDATE_INTERVAL_SEC }}
         run: |
           source ~/.venv/bin/activate
-          cd bot && python run.py
+          cd bot
+          ATTEMPT=0
+          MAX_ATTEMPTS=20
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo ""
+            echo "========================================"
+            echo "Bot start — attempt $ATTEMPT / $MAX_ATTEMPTS"
+            echo "Time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "========================================"
+            python run.py
+            EXIT=$?
+            echo "Bot exited with code $EXIT at $(date -u '+%H:%M:%S UTC')"
+            if [ $EXIT -eq 0 ]; then
+              echo "Clean exit — stopping restart loop."
+              break
+            fi
+            echo "Crash detected (code $EXIT) — restarting in 15 seconds..."
+            sleep 15
+          done
